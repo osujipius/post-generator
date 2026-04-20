@@ -1,0 +1,48 @@
+name: LinkedIn Draft Bot
+
+on:
+  schedule:
+    # Every Monday at 9:00 AM UTC
+    - cron: "0 9 * * 1"
+
+  workflow_dispatch:
+    inputs:
+      topic_hint:
+        description: "Optional topic hint (e.g. React 19, Bun 2.0)"
+        required: false
+        default: ""
+      use_image:
+        description: "Include an image? (true / false)"
+        required: false
+        default: "true"
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate draft and send to Telegram
+        env:
+          # ── Secrets (GitHub → Settings → Secrets → Actions) ──
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+          # ── Post style ──
+          NICHE: "Frontend Development"
+          TONE: "thought leader sharing an opinion"
+          FORMAT: "hook + insight with a CTA"
+
+          USE_IMAGE: ${{ github.event.inputs.use_image || 'true' }}
+          TOPIC_HINT: ${{ github.event.inputs.topic_hint || '' }}
+
+        run: node post.js
