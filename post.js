@@ -9,23 +9,28 @@ const CONFIG = {
   useImage: process.env.USE_IMAGE !== "false",
 };
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const PEXELS_API_KEY = process.env.PEXELS_API_KEY;
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 // Generate post with Claude
 async function generatePost() {
-  console.log("Generating post with Claude...");
+  console.log("Generating post with OpenAI...");
 
-  const prompt = `You are an expert LinkedIn content strategist for tech.
+  const systemPrompt = `You are an expert LinkedIn content strategist for tech.
+You have access to web search — use it to find what is actually trending right now.
+Always respond ONLY with valid JSON (no markdown fences), in this exact shape:
+{
+  "trend": "one sentence describing the trending topic you found",
+  "post": "full linkedin post text",
+  "imageQuery": "3-5 word pexels search query for a relevant professional photo"
+}`;
 
-STEP 1: Use web_search to find ONE specific trending topic in ${CONFIG.niche} right now.
-Search Hacker News, GitHub trending, dev.to, and recent tech blogs.
+  const userPrompt = `STEP 1: Search the web for ONE specific trending topic in ${CONFIG.niche} right now.
+Look at Hacker News, GitHub trending, dev.to, and recent tech blogs.
 
-STEP 2: Write a LinkedIn post about that topic.
-
-Requirements:
+STEP 2: Write a LinkedIn post about that topic with these requirements:
 - Niche: ${CONFIG.niche}
 - Tone: ${CONFIG.tone}
 - Format: ${CONFIG.format}
@@ -36,40 +41,39 @@ ${CONFIG.topicHint ? `- Topic hint: ${CONFIG.topicHint}` : ""}
 - No filler phrases like "In today's fast-paced world"
 - Under 1200 characters
 
-STEP 3: Suggest a short Pexels image search query (3–5 words) for a relevant professional photo.
+STEP 3: Suggest a Pexels image search query (3–5 words) for a relevant professional photo.
 
-Respond ONLY with valid JSON (no markdown):
-{
-  "trend": "one sentence describing the trending topic",
-  "post": "full linkedin post text",
-  "imageQuery": "pexels search query"
-}`;
+Return ONLY the JSON object, nothing else.`;
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
-      messages: [{ role: "user", content: prompt }],
+      model: "gpt-4o",
+      tools: [{ type: "web_search_preview" }],
+      instructions: systemPrompt,
+      input: userPrompt,
     }),
   });
 
-  if (!res.ok) throw new Error(`Claude API ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw new Error(`OpenAI API ${res.status}: ${await res.text()}`);
 
   const data = await res.json();
-  const textBlock = data.content.find((b) => b.type === "text");
-  if (!textBlock) throw new Error("No text block in Claude response");
 
-  const parsed = JSON.parse(textBlock.text.replace(/```json|```/g, "").trim());
+  // Extract the text output from the response
+  const textItem = data.output
+    ?.flatMap((o) => o.content ?? [])
+    .find((c) => c.type === "output_text");
+
+  if (!textItem) throw new Error("No text output in OpenAI response");
+
+  const parsed = JSON.parse(textItem.text.replace(/```json|```/g, "").trim());
   console.log(`Trend   : ${parsed.trend}`);
   console.log(`Image Q : ${parsed.imageQuery}`);
-  console.log(`\nPost:\n${parsed.post}\n`);
+  console.log(`\n📝 Post:\n${parsed.post}\n`);
   return parsed;
 }
 
@@ -80,7 +84,7 @@ async function fetchPexelsImageUrl(query) {
     return null;
   }
 
-  console.log(`🔍 Searching Pexels for: "${query}"`);
+  console.log(` Searching Pexels for: "${query}"`);
 
   const res = await fetch(
     `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=5&orientation=landscape`,
@@ -146,7 +150,7 @@ async function sendTelegramMessage(text) {
 }
 
 async function main() {
-  if (!ANTHROPIC_API_KEY) throw new Error("Missing secret: ANTHROPIC_API_KEY");
+  if (!OPENAI_API_KEY) throw new Error("Missing secret: OPENAI_API_KEY");
   if (!TELEGRAM_BOT_TOKEN)
     throw new Error("Missing secret: TELEGRAM_BOT_TOKEN");
   if (!TELEGRAM_CHAT_ID) throw new Error("Missing secret: TELEGRAM_CHAT_ID");
@@ -160,14 +164,14 @@ async function main() {
     day: "numeric",
     month: "long",
   });
-  const header = `<b>Your LinkedIn draft: ${date}</b>\n<i>Trend: ${trend}</i>\n\n`;
+  const header = `<b>Your LinkedIn draft — ${date}</b>\n<i>Trend: ${trend}</i>\n\n`;
   const footer = `\n\n<i>Copy the post above and paste it into LinkedIn. Happy posting!</i>`;
   const caption = header + post + footer;
 
   // Telegram captions are capped at 1024 chars; fall back to two messages if needed
   const captionTooLong = caption.length > 1024;
 
-  // Send to Telegram
+  // 3. Send to Telegram
   if (CONFIG.useImage && PEXELS_API_KEY) {
     try {
       const imageUrl = await fetchPexelsImageUrl(imageQuery);
@@ -183,7 +187,7 @@ async function main() {
         await sendTelegramMessage(
           `<b>Image to attach on LinkedIn:</b>\n${imageUrl}`,
         );
-        console.log("Done — image URL also sent separately for easy copying");
+        console.log(" Done — image URL also sent separately for easy copying");
       } else {
         await sendTelegramMessage(header + post + footer);
       }
@@ -195,10 +199,10 @@ async function main() {
     await sendTelegramMessage(header + post + footer);
   }
 
-  console.log(`\n Draft sent to Telegram at ${new Date().toISOString()}`);
+  console.log(`\nDraft sent to Telegram at ${new Date().toISOString()}`);
 }
 
 main().catch((err) => {
-  console.error(" Fatal error:", err.message);
+  console.error("Fatal error:", err.message);
   process.exit(1);
 });
